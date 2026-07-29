@@ -28,13 +28,13 @@ module.exports = {
     // ─────────────────────────────────────────────────────────
     CHANNELS: {
         WELCOME:      process.env.WELCOME_CHANNEL      || '1461684283327385743',
-        VC_LOG:       process.env.VC_LOG_CHANNEL       || '1531265569087557732',
-        TEXT_LOG:     process.env.TEXT_LOG_CHANNEL     || '1531265620841070612',
-        MOD_LOG:      process.env.MOD_LOG_CHANNEL      || '1531265662113288262',
+        VC_LOG:       process.env.VC_LOG_CHANNEL       || '1531981663360389322',
+        TEXT_LOG:     process.env.TEXT_LOG_CHANNEL     || '1531981973407535124',
+        MOD_LOG:      process.env.MOD_LOG_CHANNEL      || '1531981695425970246',
         TICKET_LOG:   process.env.TICKET_LOG_CHANNEL   || '1529455978142240949', // Open & Claim Logs
         TICKET_CLOSE_LOG: process.env.TICKET_CLOSE_LOG_CHANNEL || '1529476478608216246', // Close logs
         TICKET_TRANSCRIPT: process.env.TICKET_TRANSCRIPT_CHANNEL || '1531265726084808815', // HTML transcripts
-        NUKE_ALERT:   process.env.NUKE_ALERT_CHANNEL || '1531265662113288262', // Alert channel
+        NUKE_ALERT:   process.env.NUKE_ALERT_CHANNEL || '1531981881220923402', // Alert channel
     },
 
     // ─────────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ module.exports = {
         MESSAGE: '## ✧ Welcome to IMPOSTER NETWORK ✧\n\n> We are thrilled to have you here, {user}!\n> You are our **{count}**th member.\n\n**╭─── Explore ───╮**\n💬 **Chat & Make Friends**\n🎮 **Play Games**\n🌟 **Join Events**\n**╰───────────────────╯**\n\n**Quick Links:**\n<#1531388954815889409> — Server Rules\n<#1531389089495126127> — Need Help? Open a ticket!',
         DM_ENABLED: true,
         DM_MESSAGE: 'Hey {username}! Welcome to **IMPOSTER NETWORK**! 🚀\n\nWe are super excited to have you in the community. Feel free to explore the channels, meet new people, and have a great time!\n\nIf you need anything, don\'t hesitate to open a ticket in the server.',
-        BANNER_URL: 'https://cdn.discordapp.com/attachments/1457735777697009758/1529891653735809247/p8kxbk1.gif?ex=6a683362&is=6a66e1e2&hm=0c79a22f289304f8621c21246812476dc6af12e04722fd9868d16d591717fdb9&',
+        BANNER_URL: 'https://media.tenor.com/FwT96dK1G1sAAAAC/welcome-anime.gif',
         FOOTER_TEXT: 'IMPOSTER NETWORK ✨',
     },
 
