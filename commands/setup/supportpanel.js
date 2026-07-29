@@ -1,39 +1,78 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
+const {
+    SlashCommandBuilder,
+    ContainerBuilder,
+    TextDisplayBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    PermissionFlagsBits,
+    MessageFlags,
+} = require('discord.js');
 const config = require('../../config.js');
+const { CV2_FLAGS } = require('../../utils/embedBuilder');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('supportpanel')
-        .setDescription('Sends the support panel with ticket buttons.')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        .setDescription('Sends the support ticket panel.')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addChannelOption(o =>
+            o.setName('channel')
+            .setDescription('Channel to send the panel in (defaults to current)')
+            .setRequired(false)
+        ),
 
     async execute(interaction) {
-        const embed = new EmbedBuilder()
-            .setColor(config.BOT_COLOR || '#2b2d31')
-            .setTitle('Help Center')
-            .setDescription('Here you\'ll find quick answers to the most common questions about:\nCoupons\nPayments\nAccess errors\nWarranties and replacements.')
-            .setFooter({ text: config.WELCOME.FOOTER_TEXT || 'IMPOSTER NETWORK Support' });
+        const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
 
-        // Create action rows based on config buttons
-        const rows = [];
-        let currentRow = new ActionRowBuilder();
-        
-        config.SUPPORT_PANEL.BUTTONS.forEach((btn, index) => {
-            const button = new ButtonBuilder()
-                .setCustomId(btn.id)
-                .setLabel(btn.label)
-                .setStyle(ButtonStyle[btn.style] || ButtonStyle.Secondary);
-            
-            currentRow.addComponents(button);
+        // Build the CV2 panel
+        const container = new ContainerBuilder();
 
-            // Action rows can hold max 5 buttons
-            if (currentRow.components.length === 5 || index === config.SUPPORT_PANEL.BUTTONS.length - 1) {
-                rows.push(currentRow);
-                currentRow = new ActionRowBuilder();
-            }
-        });
+        container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `## 🎫 Support Center\n> **Welcome to INET Official Support**\nOur team is here to assist you with any questions or issues.`
+            )
+        );
 
-        await interaction.reply({ content: 'Sending panel...', ephemeral: true });
-        await interaction.channel.send({ embeds: [embed], components: rows });
+        container.addSeparatorComponents(
+            new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+        );
+
+        container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `**What we can help you with:**\n` +
+                `> 🏷️ Coupon & pricing issues\n` +
+                `> 📺 Netflix / streaming errors\n` +
+                `> 🧾 Invoice & payment queries\n` +
+                `> 🔁 Warranty & replacements\n` +
+                `> 🌐 VPN & access issues\n` +
+                `> ⏱️ Approval time queries`
+            )
+        );
+
+        container.addSeparatorComponents(
+            new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+        );
+
+        container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+                `-# Click the button below to open a support ticket. Our team will respond as soon as possible.`
+            )
+        );
+
+        // Single open ticket button
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('ticket_create')
+                .setLabel('🎫 Open Ticket Now')
+                .setStyle(ButtonStyle.Primary)
+        );
+
+        container.addActionRowComponents(row);
+
+        await interaction.reply({ content: '✅ Panel sent!', flags: MessageFlags.Ephemeral });
+        await targetChannel.send({ components: [container], flags: CV2_FLAGS });
     }
 };
