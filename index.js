@@ -278,7 +278,7 @@ if (config.KEEPALIVE.ENABLED) {
 // ─────────────────────────────────────────────────────────────
 //  Ready event hook — register commands after login
 // ─────────────────────────────────────────────────────────────
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     try {
         await registerCommands();
     } catch (err) {
