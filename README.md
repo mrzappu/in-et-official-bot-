@@ -1,4 +1,4 @@
-# ✦ GOJO BOT
+# ✦ INET
 
 > A full-featured Discord moderation bot — Welcome, Auto-Role, Logging, Moderation, Auto-Mod, and a complete Ticket System with transcripts.
 
@@ -7,7 +7,7 @@
 ## 📁 File & Folder Structure
 
 ```
-GOJO BOT SRC/
+INET BOT SRC/
 │
 ├── index.js                         ← Main entry point (loads everything)
 ├── config.js                        ← ALL configuration (tokens, IDs, settings)
@@ -233,4 +233,4 @@ Staff clicks [Close] → Transcript generated → Posted in #transcript-log
 
 ---
 
-*GOJO Bot — Built with Discord.js v14 • Matching Infinity Music Bot aesthetics*
+*INET Bot — Built with Discord.js v14 • Matching Infinity Music Bot aesthetics*
