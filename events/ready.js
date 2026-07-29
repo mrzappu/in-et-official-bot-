@@ -6,11 +6,11 @@ const { printReady } = require('../utils/logger');
 const db = require('../utils/database');
 
 module.exports = {
-    name: 'ready',
+    name: 'clientReady',
     once: true,
     async execute(client) {
         printReady(client.user.tag, client.guilds.cache.size);
-        client.user.setActivity("GØJO's STEAM LOUNGE", { type: ActivityType.Watching });
+        client.user.setActivity("INET OFFICIAL", { type: ActivityType.Watching });
 
         // Start background loop to check for expired timeouts
         setInterval(async () => {
