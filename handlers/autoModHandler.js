@@ -4,11 +4,29 @@
 //  All violations → delete message + 5min timeout + log
 // ============================================================
 
-const { AttachmentBuilder } = require('discord.js');
+const { AttachmentBuilder, EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const { autoModEmbed } = require('../utils/embedBuilder');
 
 const db = require('../utils/database');
+
+// ─────────────────────────────────────────────────────────────
+//  Emoji Spam Tracker  (in-memory, resets on restart)
+//  Map: userId => { count, lastReset, warnings }
+// ─────────────────────────────────────────────────────────────
+const emojiTracker = new Map();
+const EMOJI_WINDOW_MS   = 10_000;  // 10-second rolling window
+const EMOJI_LIMIT       = 5;       // emojis per window before warn
+const EMOJI_WARN_LIMIT  = 3;       // warnings before timeout
+
+// ─────────────────────────────────────────────────────────────
+//  Mention Spam Tracker  (in-memory, resets on restart)
+//  Map: `senderId:targetId` => { count, lastReset }
+//  If sender pings the same person >2 times in 30s => timeout
+// ─────────────────────────────────────────────────────────────
+const mentionTracker = new Map();
+const MENTION_WINDOW_MS = 30_000; // 30-second rolling window
+const MENTION_LIMIT     = 2;      // max times same user can be pinged
 
 // ─────────────────────────────────────────────────────────────
 //  Timeout helper — applies timeout + saves roles + adds blacklist
@@ -248,8 +266,147 @@ async function checkLinks(message) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Main auto-mod runner — call this from messageCreate event
+//  EMOJI SPAM CHECK
+//  Counts Unicode emojis + custom Discord emojis per user.
+//  >5 in 10s → warn in channel. 3 warns → timeout 5 min.
 // ─────────────────────────────────────────────────────────────
+async function checkEmojiSpam(message) {
+    if (!config.AUTOMOD.ENABLED) return false;
+
+    // Count all emojis: unicode + custom Discord <:name:id> / <a:name:id>
+    const unicodeEmojiRegex = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu;
+    const customEmojiRegex  = /<a?:[a-zA-Z0-9_]+:\d+>/g;
+    const unicodeMatches = message.content.match(unicodeEmojiRegex) || [];
+    const customMatches  = message.content.match(customEmojiRegex)  || [];
+    const emojiCount = unicodeMatches.length + customMatches.length;
+
+    if (emojiCount === 0) return false;
+
+    const userId = message.author.id;
+    const now    = Date.now();
+
+    // Get or create tracker entry
+    let entry = emojiTracker.get(userId);
+    if (!entry || now - entry.lastReset > EMOJI_WINDOW_MS) {
+        entry = { count: 0, lastReset: now, warnings: entry ? entry.warnings : 0 };
+    }
+
+    entry.count += emojiCount;
+    emojiTracker.set(userId, entry);
+
+    // Below threshold — no action
+    if (entry.count <= EMOJI_LIMIT) return false;
+
+    // Reset window count so we don't spam-warn on every message
+    entry.count = 0;
+    entry.warnings += 1;
+    emojiTracker.set(userId, entry);
+
+    // Still has warnings remaining → send in-channel warning
+    if (entry.warnings < EMOJI_WARN_LIMIT) {
+        try { await message.delete(); } catch { /* already gone */ }
+
+        await message.channel.send({
+            content: `⚠️ ${message.author} **Stop spamming emojis!** (Warning ${entry.warnings}/${EMOJI_WARN_LIMIT}) — Next violation will result in a timeout.`,
+        }).then(m => setTimeout(() => m.delete().catch(() => {}), 8000));
+
+        return true;
+    }
+
+    // Hit warn limit → timeout
+    try { await message.delete(); } catch { /* already gone */ }
+
+    // Reset warnings after timeout so they start fresh
+    entry.warnings = 0;
+    emojiTracker.set(userId, entry);
+
+    const timedOut = await applyTimeout(
+        message.member,
+        config.AUTOMOD.TIMEOUT_DURATION_MS,
+        'Auto-Mod: Emoji spam'
+    );
+
+    await message.channel.send({
+        content: `🚫 ${message.author} has been timed out for **emoji spam**.`,
+    }).then(m => setTimeout(() => m.delete().catch(() => {}), 10000));
+
+    await warnUser(message.member, 'You were timed out for spamming emojis repeatedly.');
+
+    const embed = autoModEmbed({
+        type: 'Emoji Spam',
+        member: message.member,
+        reason: `Sent excessive emojis (${EMOJI_WARN_LIMIT} warnings triggered)`,
+        action: timedOut ? `Timed out for ${config.AUTOMOD.TIMEOUT_DURATION_MS / 60000} minutes` : 'Message deleted (timeout failed)',
+    });
+    await sendAutoModLog(message.guild, embed);
+
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  MENTION SPAM CHECK
+//  If sender pings the same user more than 2 times in 30s → timeout
+// ─────────────────────────────────────────────────────────────
+async function checkMentionSpam(message) {
+    if (!config.AUTOMOD.ENABLED) return false;
+    if (message.mentions.users.size === 0) return false;
+
+    const senderId = message.author.id;
+    const now      = Date.now();
+    let triggered  = false;
+
+    for (const [targetId] of message.mentions.users) {
+        // Don't track self-mentions
+        if (targetId === senderId) continue;
+
+        const key   = `${senderId}:${targetId}`;
+        let entry   = mentionTracker.get(key);
+
+        // Reset window if expired
+        if (!entry || now - entry.lastReset > MENTION_WINDOW_MS) {
+            entry = { count: 0, lastReset: now };
+        }
+
+        entry.count += 1;
+        mentionTracker.set(key, entry);
+
+        if (entry.count > MENTION_LIMIT) {
+            triggered = true;
+            // Reset so they get a fresh window after punishment
+            mentionTracker.set(key, { count: 0, lastReset: now });
+            break;
+        }
+    }
+
+    if (!triggered) return false;
+
+    // Delete the offending message
+    try { await message.delete(); } catch { /* already gone */ }
+
+    // Apply timeout immediately (no warning phase — this is direct harassment)
+    const timedOut = await applyTimeout(
+        message.member,
+        config.AUTOMOD.TIMEOUT_DURATION_MS,
+        'Auto-Mod: Mention spam (pinging same user repeatedly)'
+    );
+
+    await message.channel.send({
+        content: `🚫 ${message.author} has been timed out for **repeatedly mentioning the same user**.`,
+    }).then(m => setTimeout(() => m.delete().catch(() => {}), 10000));
+
+    await warnUser(message.member, 'You were timed out for repeatedly pinging the same person. This is considered harassment.');
+
+    const embed = autoModEmbed({
+        type: 'Mention Spam',
+        member: message.member,
+        reason: `Pinged the same user more than ${MENTION_LIMIT} times within 30 seconds`,
+        action: timedOut ? `Timed out for ${config.AUTOMOD.TIMEOUT_DURATION_MS / 60000} minutes` : 'Message deleted (timeout failed)',
+    });
+    await sendAutoModLog(message.guild, embed);
+
+    return true;
+}
+
 async function runAutoMod(message) {
     if (message.author.bot) return;
     if (!message.guild)     return;
@@ -264,6 +421,8 @@ async function runAutoMod(message) {
     if (await checkMassMention(message)) return;
     if (await checkScam(message))        return;
     if (await checkLinks(message))       return;
+    if (await checkEmojiSpam(message))   return;
+    if (await checkMentionSpam(message)) return;
 }
 
-module.exports = { runAutoMod, checkToxicWords, checkMassMention, checkScam, checkLinks };
+module.exports = { runAutoMod, checkToxicWords, checkMassMention, checkScam, checkLinks, checkEmojiSpam, checkMentionSpam };
