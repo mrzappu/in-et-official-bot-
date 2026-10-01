@@ -30,11 +30,24 @@ module.exports = {
                 if (err.code !== 10062) {
                     console.error(`[CMD Error] ${interaction.commandName}:`, err);
                 }
-                const errMsg = { content: '❌ There was an error executing this command.', flags: 64 };
+
+                const { ContainerBuilder, TextDisplayBuilder, MessageFlags } = require('discord.js');
+                const { CV2_FLAGS } = require('../utils/embedBuilder');
+
+                const errContainer = new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('❌ There was an error executing this command.')
+                );
+                const errPayload = { components: [errContainer], flags: CV2_FLAGS | MessageFlags.Ephemeral };
+
                 try {
-                    if (!interaction.replied && !interaction.deferred) await interaction.reply(errMsg);
-                    else if (interaction.deferred) await interaction.editReply(errMsg);
-                } catch { /* ignore */ }
+                    if (interaction.deferred && !interaction.replied) {
+                        await interaction.editReply(errPayload);
+                    } else if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply(errPayload);
+                    }
+                } catch (e) {
+                    if (e.code !== 10062) console.error('[CMD Error Reply]', e.message);
+                }
             }
             return;
         }
@@ -43,14 +56,12 @@ module.exports = {
         if (interaction.isButton()) {
             const id = interaction.customId;
 
-            // Ticket panel — open a new ticket
             const isTicketCreateBtn = require('../config').SUPPORT_PANEL.BUTTONS.find(b => b.id === id);
             if (isTicketCreateBtn || id === 'ticket_create') {
                 const { createTicket } = require('../handlers/ticketHandler');
                 return createTicket(interaction, isTicketCreateBtn ? isTicketCreateBtn.label : 'General Support');
             }
 
-            // Ticket management buttons
             const ticketButtonMap = {
                 ticket_claim:      claimTicket,
                 ticket_close:      closeTicket,
@@ -62,7 +73,6 @@ module.exports = {
             };
 
             if (ticketButtonMap[id]) {
-                // Check permissions for management buttons
                 if (['ticket_claim', 'ticket_close', 'ticket_reopen', 'ticket_delete', 'ticket_transcript', 'ticket_add_user', 'ticket_remove_user'].includes(id)) {
                     const isSupport = interaction.member.roles.cache.has(require('../config').ROLES.TICKET_SUPPORT)
                         || interaction.member.roles.cache.has(require('../config').ROLES.TICKET_ADMIN)
