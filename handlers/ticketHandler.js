@@ -76,30 +76,43 @@ function getTicketButtonRow(claimed = false, closed = false) {
 async function createTicket(interaction, ticketCategory = 'General Support') {
     const { guild, user } = interaction;
 
-    let existing = null;
+    // Defer IMMEDIATELY — before any async work
     try {
-        existing = await db.getOpenTicketByUser(user.id);
-    } catch (dbErr) {
-        console.error('[Ticket] DB lookup failed:', dbErr.message);
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        }
+    } catch (e) {
+        console.error('[Ticket] deferReply failed:', e.message);
+        return;
     }
 
-    if (existing) {
-        return interaction.reply({
-            components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(`❌ You already have an open ticket: <#${existing.channelId}>`)
-            )],
-            flags: CV2_FLAGS | MessageFlags.Ephemeral,
-        });
-    }
-
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
     try {
-        const categoryId    = '1529455858612830238';
+        // Check existing open ticket from DB
+        let existing = null;
+        try {
+            existing = await db.getOpenTicketByUser(user.id);
+        } catch (dbErr) {
+            console.error('[Ticket] DB lookup failed:', dbErr.message);
+        }
+
+        if (existing) {
+            return interaction.editReply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(`❌ You already have an open ticket: <#${existing.channelId}>`)
+                )],
+                flags: CV2_FLAGS,
+            });
+        }
+
+        const categoryId    = config.CATEGORIES.TICKETS_OPEN;
         const supportRoleId = config.ROLES.TICKET_SUPPORT;
         const adminRoleId   = config.ROLES.TICKET_ADMIN;
 
-        const category = guild.channels.cache.get(categoryId);
+        // Verify category exists
+        let category = guild.channels.cache.get(categoryId);
+        if (!category) {
+            category = await guild.channels.fetch(categoryId).catch(() => null);
+        }
         if (!category) {
             return interaction.editReply({
                 components: [new ContainerBuilder().addTextDisplayComponents(
@@ -181,7 +194,7 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
                 )],
                 flags: CV2_FLAGS,
             });
-        } catch (e) { /* interaction may have expired */ }
+        } catch (e) { /* interaction expired */ }
     }
 }
 
@@ -284,7 +297,7 @@ async function reopenTicket(interaction) {
 
     await db.updateTicket(channel.id, { closed: false, claimedBy: null });
 
-    const openCatId = '1529455858612830238';
+    const openCatId = config.CATEGORIES.TICKETS_OPEN;
     await channel.setParent(openCatId, { lockPermissions: false }).catch(() => {});
 
     await channel.permissionOverwrites.edit(ticket.userId, {
