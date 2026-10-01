@@ -35,7 +35,7 @@ module.exports = {
                 const { CV2_FLAGS } = require('../utils/embedBuilder');
 
                 const errContainer = new ContainerBuilder().addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent('❌ There was an error executing this command.')
+                    new TextDisplayBuilder().setContent('There was an error executing this command.')
                 );
                 const errPayload = { components: [errContainer], flags: CV2_FLAGS | MessageFlags.Ephemeral };
 
@@ -56,12 +56,26 @@ module.exports = {
         if (interaction.isButton()) {
             const id = interaction.customId;
 
+            // Ticket panel — open a new ticket
             const isTicketCreateBtn = require('../config').SUPPORT_PANEL.BUTTONS.find(b => b.id === id);
             if (isTicketCreateBtn || id === 'ticket_create') {
                 const { createTicket } = require('../handlers/ticketHandler');
-                return createTicket(interaction, isTicketCreateBtn ? isTicketCreateBtn.label : 'General Support');
+                try {
+                    return await createTicket(interaction, isTicketCreateBtn ? isTicketCreateBtn.label : 'General Support');
+                } catch (err) {
+                    console.error('[Ticket Create Error]', err);
+                    try {
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.reply({ content: 'Failed to open ticket.', ephemeral: true });
+                        } else if (interaction.deferred) {
+                            await interaction.editReply({ content: 'Failed to open ticket.' });
+                        }
+                    } catch (e) { /* ignore */ }
+                    return;
+                }
             }
 
+            // Ticket management buttons
             const ticketButtonMap = {
                 ticket_claim:      claimTicket,
                 ticket_close:      closeTicket,
@@ -73,16 +87,29 @@ module.exports = {
             };
 
             if (ticketButtonMap[id]) {
+                // Check permissions
                 if (['ticket_claim', 'ticket_close', 'ticket_reopen', 'ticket_delete', 'ticket_transcript', 'ticket_add_user', 'ticket_remove_user'].includes(id)) {
                     const isSupport = interaction.member.roles.cache.has(require('../config').ROLES.TICKET_SUPPORT)
                         || interaction.member.roles.cache.has(require('../config').ROLES.TICKET_ADMIN)
                         || interaction.member.permissions.has('ManageChannels');
 
-                    if (!isSupport && id !== 'ticket_close') {
-                        return interaction.reply({ content: '❌ You do not have permission to use this.', ephemeral: true });
+                    if (!isSupport) {
+                        return interaction.reply({ content: 'You do not have permission to use this.', ephemeral: true });
                     }
                 }
-                return ticketButtonMap[id](interaction);
+                try {
+                    return await ticketButtonMap[id](interaction);
+                } catch (err) {
+                    console.error(`[Ticket Button Error] ${id}:`, err);
+                    try {
+                        if (!interaction.replied && !interaction.deferred) {
+                            await interaction.reply({ content: 'An error occurred.', ephemeral: true });
+                        } else if (interaction.deferred) {
+                            await interaction.editReply({ content: 'An error occurred.' });
+                        }
+                    } catch (e) { /* ignore */ }
+                    return;
+                }
             }
         }
 
