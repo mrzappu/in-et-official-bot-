@@ -27,12 +27,11 @@ module.exports = {
     async execute(interaction) {
         const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
 
-        // Build the CV2 panel
         const container = new ContainerBuilder();
 
         container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                `## 🎫 Support Center\n> **Welcome to INET Official Support**\nOur team is here to assist you with any questions or issues.`
+                `## Support Center\n> **Welcome to INET Official Support**\nOur team is here to assist you with any questions or issues.`
             )
         );
 
@@ -43,12 +42,12 @@ module.exports = {
         container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
                 `**What we can help you with:**\n` +
-                `> 🏷️ Coupon & pricing issues\n` +
-                `> 📺 Netflix / streaming errors\n` +
-                `> 🧾 Invoice & payment queries\n` +
-                `> 🔁 Warranty & replacements\n` +
-                `> 🌐 VPN & access issues\n` +
-                `> ⏱️ Approval time queries`
+                `> Coupon & pricing issues\n` +
+                `> Netflix / streaming errors\n` +
+                `> Invoice & payment queries\n` +
+                `> Warranty & replacements\n` +
+                `> VPN & access issues\n` +
+                `> Approval time queries`
             )
         );
 
@@ -62,17 +61,16 @@ module.exports = {
             )
         );
 
-        // Single open ticket button
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('ticket_create')
-                .setLabel('🎫 Open Ticket Now')
+                .setLabel('Create Ticket')
                 .setStyle(ButtonStyle.Primary)
         );
 
         container.addActionRowComponents(row);
 
-        await interaction.reply({ content: '✅ Panel sent!', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Panel sent!', flags: MessageFlags.Ephemeral });
         await targetChannel.send({ components: [container], flags: CV2_FLAGS });
     }
 };
