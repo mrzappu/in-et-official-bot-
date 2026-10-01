@@ -46,21 +46,19 @@ module.exports = {
             return replyError(interaction, 'Please select a text channel.');
         }
 
-        // Build the panel
         const container = new ContainerBuilder()
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
             .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(desc))
             .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small))
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-                '-# Note: Tickets are private. Only staff members can view and assist.'
+                'Note: Tickets are private. Only staff members can view and assist.'
             ));
 
         const buttonRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('ticket_create')
-                .setLabel('Order Game')
-                .setEmoji('1531286917755179220')
+                .setLabel('Create Ticket')
                 .setStyle(ButtonStyle.Primary)
         );
 
@@ -70,7 +68,7 @@ module.exports = {
 
         await interaction.reply({
             components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(`✅ Ticket panel posted in <#${targetChannel.id}>`)
+                new TextDisplayBuilder().setContent(`Ticket panel posted in <#${targetChannel.id}>`)
             )],
             flags: CV2_FLAGS | 64,
         });
