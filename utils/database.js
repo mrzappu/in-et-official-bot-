@@ -1,17 +1,16 @@
 // ============================================================
 //  INET BOT — SQLite Database (Sequelize)
 //  File: utils/database.js
-//  Stores: tickets — survives bot restarts with zero data loss
+//  Stores: tickets + ticket counter + member timeouts
 // ============================================================
 
 const { Sequelize, DataTypes, Op } = require('sequelize');
 const path = require('path');
 
-// ── Connect to INET.db in project root ──────────────────────
 const sequelize = new Sequelize({
     dialect: 'sqlite',
     storage: path.join(__dirname, '..', 'INET.db'),
-    logging: false,   // silence SQL query logs
+    logging: false,
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -34,6 +33,11 @@ const Ticket = sequelize.define('Ticket', {
     guildId: {
         type: DataTypes.STRING,
         allowNull: false,
+    },
+    ticketNumber: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        defaultValue: null,
     },
     claimedBy: {
         type: DataTypes.STRING,
@@ -61,7 +65,7 @@ const Ticket = sequelize.define('Ticket', {
     },
 }, {
     tableName: 'tickets',
-    timestamps: true,       // createdAt + updatedAt tracked
+    timestamps: true,
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -82,7 +86,7 @@ const MemberTimeout = sequelize.define('MemberTimeout', {
         allowNull: false,
     },
     roles: {
-        type: DataTypes.TEXT, // Store as JSON string
+        type: DataTypes.TEXT,
         allowNull: false,
         defaultValue: '[]',
     },
@@ -95,13 +99,31 @@ const MemberTimeout = sequelize.define('MemberTimeout', {
     timestamps: true,
 });
 
+// ─────────────────────────────────────────────────────────────
+//  MODEL: TicketCounter (per-guild ticket counter)
+// ─────────────────────────────────────────────────────────────
+const TicketCounter = sequelize.define('TicketCounter', {
+    guildId: {
+        type: DataTypes.STRING,
+        primaryKey: true,
+        allowNull: false,
+    },
+    lastNumber: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+    },
+}, {
+    tableName: 'ticket_counters',
+    timestamps: true,
+});
 
 // ─────────────────────────────────────────────────────────────
 //  HELPERS
 // ─────────────────────────────────────────────────────────────
 async function initDatabase() {
     await sequelize.authenticate();
-    await sequelize.sync({ alter: true });  // auto-create / migrate tables
+    await sequelize.sync({ alter: true });
     console.log('[DB] INET.db connected and tables synced.');
     return sequelize;
 }
@@ -134,8 +156,30 @@ async function getAllTickets() {
     return Ticket.findAll();
 }
 
+// ─────────────────────────────────────────────────────────────
+//  TICKET COUNTER HELPERS
+// ─────────────────────────────────────────────────────────────
+async function getNextTicketNumber(guildId, startAt = 127) {
+    let counter = await TicketCounter.findByPk(guildId);
+    if (!counter) {
+        counter = await TicketCounter.create({
+            guildId: guildId,
+            lastNumber: startAt - 1,
+        });
+    }
+    const next = counter.lastNumber + 1;
+    counter.lastNumber = next;
+    await counter.save();
+    return next;
+}
+
+async function getCurrentTicketNumber(guildId, startAt = 127) {
+    const counter = await TicketCounter.findByPk(guildId);
+    if (!counter) return startAt - 1;
+    return counter.lastNumber;
+}
+
 async function saveMemberTimeout(data) {
-    // Upsert or create
     return MemberTimeout.create(data);
 }
 
@@ -160,14 +204,17 @@ async function getExpiredTimeouts() {
 module.exports = {
     sequelize,
     Ticket,
+    TicketCounter,
     initDatabase,
     saveTicket,
     getTicket,
     getOpenTicketByUser,
     updateTicket,
-    deleteTicket: deleteTicket,
+    deleteTicket,
     getAllOpenTickets,
     getAllTickets,
+    getNextTicketNumber,
+    getCurrentTicketNumber,
     MemberTimeout,
     saveMemberTimeout,
     getMemberTimeout,
