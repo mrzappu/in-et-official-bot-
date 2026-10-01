@@ -25,7 +25,7 @@ const { ticketLogEmbed, CV2_FLAGS } = require('../utils/embedBuilder');
 const db = require('../utils/database');
 
 // ─────────────────────────────────────────────────────────────
-//  Ticket control buttons row
+//  Ticket control buttons row  (NO emojis)
 // ─────────────────────────────────────────────────────────────
 function getTicketButtonRow(claimed = false, closed = false) {
     const row = new ActionRowBuilder();
@@ -76,7 +76,7 @@ function getTicketButtonRow(claimed = false, closed = false) {
 async function createTicket(interaction, ticketCategory = 'General Support') {
     const { guild, user } = interaction;
 
-    // Defer IMMEDIATELY — before any async work
+    // Defer IMMEDIATELY to prevent Unknown Interaction
     try {
         if (!interaction.deferred && !interaction.replied) {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -87,7 +87,6 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
     }
 
     try {
-        // Check existing open ticket from DB
         let existing = null;
         try {
             existing = await db.getOpenTicketByUser(user.id);
@@ -98,7 +97,7 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
         if (existing) {
             return interaction.editReply({
                 components: [new ContainerBuilder().addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`❌ You already have an open ticket: <#${existing.channelId}>`)
+                    new TextDisplayBuilder().setContent(`You already have an open ticket: <#${existing.channelId}>`)
                 )],
                 flags: CV2_FLAGS,
             });
@@ -108,7 +107,6 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
         const supportRoleId = config.ROLES.TICKET_SUPPORT;
         const adminRoleId   = config.ROLES.TICKET_ADMIN;
 
-        // Verify category exists
         let category = guild.channels.cache.get(categoryId);
         if (!category) {
             category = await guild.channels.fetch(categoryId).catch(() => null);
@@ -116,13 +114,23 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
         if (!category) {
             return interaction.editReply({
                 components: [new ContainerBuilder().addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent('❌ Ticket category not found. Please contact an administrator.')
+                    new TextDisplayBuilder().setContent('Ticket category not found. Please contact an administrator.')
                 )],
                 flags: CV2_FLAGS,
             });
         }
 
-        const channelName = `📜〢${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        // Get next ticket number (starts at 127)
+        let ticketNumber;
+        try {
+            ticketNumber = await db.getNextTicketNumber(guild.id, config.TICKET_COUNTER_START);
+        } catch (err) {
+            console.error('[Ticket] Failed to get ticket number:', err.message);
+            ticketNumber = config.TICKET_COUNTER_START;
+        }
+
+        // Channel name: only "ticket-0127" style
+        const channelName = `ticket-${String(ticketNumber).padStart(4, '0')}`;
 
         const permissionOverwrites = [
             { id: guild.id,  deny: [PermissionFlagsBits.ViewChannel] },
@@ -148,7 +156,7 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
             type: ChannelType.GuildText,
             parent: categoryId,
             permissionOverwrites,
-            topic: `Ticket by ${user.tag} | User ID: ${user.id} | Category: ${ticketCategory}`,
+            topic: `Ticket #${ticketNumber} by ${user.tag} | User ID: ${user.id} | Category: ${ticketCategory}`,
         });
 
         await db.saveTicket({
@@ -156,12 +164,13 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
             userId:     user.id,
             userTag:    user.tag,
             guildId:    guild.id,
+            ticketNumber: ticketNumber,
             claimedBy:  null,
             closed:     false,
         });
 
         const container = new ContainerBuilder()
-            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📜 Ticket — ${user.username}`))
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Ticket #${ticketNumber}`))
             .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(
                 `${user} opened a ticket.\n\n**Category:** ${ticketCategory}\n\nPlease describe your issue and a staff member will assist you shortly.\n\n-# Opened: <t:${Math.floor(Date.now() / 1000)}:F>`
@@ -181,7 +190,7 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
 
         await interaction.editReply({
             components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(`✅ Ticket created: <#${ticketChannel.id}>`)
+                new TextDisplayBuilder().setContent(`Ticket created: <#${ticketChannel.id}>`)
             )],
             flags: CV2_FLAGS,
         });
@@ -190,7 +199,7 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
         try {
             await interaction.editReply({
                 components: [new ContainerBuilder().addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`❌ Failed to create ticket: ${err.message}`)
+                    new TextDisplayBuilder().setContent(`Failed to create ticket: ${err.message}`)
                 )],
                 flags: CV2_FLAGS,
             });
@@ -202,232 +211,305 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
 //  CLAIM / UNCLAIM
 // ─────────────────────────────────────────────────────────────
 async function claimTicket(interaction) {
-    const { channel, user } = interaction;
-    const ticket = await db.getTicket(channel.id);
+    try {
+        const { channel, user } = interaction;
+        const ticket = await db.getTicket(channel.id);
 
-    if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
+        if (!ticket) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('Not a valid ticket channel.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
 
-    if (ticket.claimedBy && ticket.claimedBy !== user.id) {
-        return interaction.reply({
-            components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(`❌ This ticket is already claimed by <@${ticket.claimedBy}>.`)
-            )],
-            flags: CV2_FLAGS | MessageFlags.Ephemeral,
-        });
+        if (ticket.claimedBy && ticket.claimedBy !== user.id) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(`This ticket is already claimed by <@${ticket.claimedBy}>.`)
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
+
+        const isClaiming = ticket.claimedBy !== user.id;
+        const newClaimedBy = isClaiming ? user.id : null;
+
+        await db.updateTicket(channel.id, { claimedBy: newClaimedBy });
+
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+                isClaiming
+                    ? `**Ticket Claimed** by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:R>`
+                    : `**Ticket Unclaimed** by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:R>`
+            ));
+
+        const newButtonRow = getTicketButtonRow(isClaiming, false);
+        container.addActionRowComponents(newButtonRow);
+
+        await interaction.update({ components: [container], flags: CV2_FLAGS });
+
+        await sendTicketLog(channel.guild, ticketLogEmbed({
+            action:   isClaiming ? 'Claimed' : 'Unclaimed',
+            ticket:   channel,
+            user:     { tag: ticket.userTag, id: ticket.userId },
+            executor: user,
+        }));
+    } catch (err) {
+        console.error('[Ticket] claimTicket error:', err);
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: 'An error occurred while claiming.', ephemeral: true }).catch(() => {});
+        }
     }
-
-    const isClaiming = ticket.claimedBy !== user.id;
-    const newClaimedBy = isClaiming ? user.id : null;
-
-    await db.updateTicket(channel.id, { claimedBy: newClaimedBy });
-
-    const container = new ContainerBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-            isClaiming
-                ? `**Ticket Claimed** by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:R>`
-                : `**Ticket Unclaimed** by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:R>`
-        ));
-
-    const newButtonRow = getTicketButtonRow(isClaiming, false);
-    container.addActionRowComponents(newButtonRow);
-
-    await interaction.update({ components: [container], flags: CV2_FLAGS });
-
-    await sendTicketLog(channel.guild, ticketLogEmbed({
-        action:   isClaiming ? 'Claimed' : 'Unclaimed',
-        ticket:   channel,
-        user:     { tag: ticket.userTag, id: ticket.userId },
-        executor: user,
-    }));
 }
 
 // ─────────────────────────────────────────────────────────────
 //  CLOSE
 // ─────────────────────────────────────────────────────────────
 async function closeTicket(interaction) {
-    const { channel, user, guild } = interaction;
-    const ticket = await db.getTicket(channel.id);
-    if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
+    try {
+        const { channel, user, guild } = interaction;
+        const ticket = await db.getTicket(channel.id);
+        if (!ticket) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('Not a valid ticket channel.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
 
-    await db.updateTicket(channel.id, {
-        closed:   true,
-        closedAt: new Date(),
-        closedBy: user.id,
-    });
+        await db.updateTicket(channel.id, {
+            closed:   true,
+            closedAt: new Date(),
+            closedBy: user.id,
+        });
 
-    const closedCatId = config.CATEGORIES.TICKETS_CLOSED;
-    if (closedCatId && !closedCatId.includes('_HERE')) {
-        await channel.setParent(closedCatId, { lockPermissions: false }).catch(() => {});
+        const closedCatId = config.CATEGORIES.TICKETS_CLOSED;
+        if (closedCatId && !closedCatId.includes('_HERE')) {
+            await channel.setParent(closedCatId, { lockPermissions: false }).catch(() => {});
+        }
+
+        await channel.permissionOverwrites.edit(ticket.userId, {
+            SendMessages: false,
+        }).catch(() => {});
+
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Ticket Closed`))
+            .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+                `Closed by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:F>`
+            ));
+
+        const closedButtons = getTicketButtonRow(false, true);
+        container.addActionRowComponents(closedButtons);
+
+        await interaction.update({ components: [container], flags: CV2_FLAGS });
+
+        const freshTicket = await db.getTicket(channel.id);
+        await generateAndSendTranscript(channel, guild, user, freshTicket || ticket);
+
+        await sendTicketLog(guild, ticketLogEmbed({
+            action:   'Closed',
+            ticket:   channel,
+            user:     { tag: ticket.userTag, id: ticket.userId },
+            executor: user,
+        }));
+    } catch (err) {
+        console.error('[Ticket] closeTicket error:', err);
     }
-
-    await channel.permissionOverwrites.edit(ticket.userId, {
-        SendMessages: false,
-    }).catch(() => {});
-
-    const container = new ContainerBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Ticket Closed`))
-        .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-            `Closed by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:F>`
-        ));
-
-    const closedButtons = getTicketButtonRow(false, true);
-    container.addActionRowComponents(closedButtons);
-
-    await interaction.update({ components: [container], flags: CV2_FLAGS });
-
-    const freshTicket = await db.getTicket(channel.id);
-    await generateAndSendTranscript(channel, guild, user, freshTicket || ticket);
-
-    await sendTicketLog(guild, ticketLogEmbed({
-        action:   'Closed',
-        ticket:   channel,
-        user:     { tag: ticket.userTag, id: ticket.userId },
-        executor: user,
-    }));
 }
 
 // ─────────────────────────────────────────────────────────────
 //  REOPEN
 // ─────────────────────────────────────────────────────────────
 async function reopenTicket(interaction) {
-    const { channel, user, guild } = interaction;
-    const ticket = await db.getTicket(channel.id);
-    if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
+    try {
+        const { channel, user, guild } = interaction;
+        const ticket = await db.getTicket(channel.id);
+        if (!ticket) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('Not a valid ticket channel.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
 
-    await db.updateTicket(channel.id, { closed: false, claimedBy: null });
+        await db.updateTicket(channel.id, { closed: false, claimedBy: null });
 
-    const openCatId = config.CATEGORIES.TICKETS_OPEN;
-    await channel.setParent(openCatId, { lockPermissions: false }).catch(() => {});
+        const openCatId = config.CATEGORIES.TICKETS_OPEN;
+        await channel.setParent(openCatId, { lockPermissions: false }).catch(() => {});
 
-    await channel.permissionOverwrites.edit(ticket.userId, {
-        ViewChannel:        true,
-        SendMessages:       true,
-        ReadMessageHistory: true,
-    }).catch(() => {});
+        await channel.permissionOverwrites.edit(ticket.userId, {
+            ViewChannel:        true,
+            SendMessages:       true,
+            ReadMessageHistory: true,
+        }).catch(() => {});
 
-    const container = new ContainerBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Ticket Reopened`))
-        .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-            `Reopened by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:F>`
-        ));
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Ticket Reopened`))
+            .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+                `Reopened by ${user}\n-# <t:${Math.floor(Date.now() / 1000)}:F>`
+            ));
 
-    const openButtons = getTicketButtonRow(false, false);
-    container.addActionRowComponents(openButtons);
+        const openButtons = getTicketButtonRow(false, false);
+        container.addActionRowComponents(openButtons);
 
-    await interaction.update({ components: [container], flags: CV2_FLAGS });
+        await interaction.update({ components: [container], flags: CV2_FLAGS });
 
-    await sendTicketLog(guild, ticketLogEmbed({
-        action:   'Reopened',
-        ticket:   channel,
-        user:     { tag: ticket.userTag, id: ticket.userId },
-        executor: user,
-    }));
+        await sendTicketLog(guild, ticketLogEmbed({
+            action:   'Reopened',
+            ticket:   channel,
+            user:     { tag: ticket.userTag, id: ticket.userId },
+            executor: user,
+        }));
+    } catch (err) {
+        console.error('[Ticket] reopenTicket error:', err);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
 //  DELETE
 // ─────────────────────────────────────────────────────────────
 async function deleteTicket(interaction) {
-    const { channel, user, guild } = interaction;
-    const ticket = await db.getTicket(channel.id);
-    if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
+    try {
+        const { channel, user, guild } = interaction;
+        const ticket = await db.getTicket(channel.id);
+        if (!ticket) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('Not a valid ticket channel.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
 
-    await interaction.reply({
-        components: [new ContainerBuilder().addTextDisplayComponents(
-            new TextDisplayBuilder().setContent('🗑️ Deleting ticket in 5 seconds...')
-        )],
-        flags: CV2_FLAGS | MessageFlags.Ephemeral,
-    });
+        await interaction.reply({
+            components: [new ContainerBuilder().addTextDisplayComponents(
+                new TextDisplayBuilder().setContent('Deleting ticket in 5 seconds...')
+            )],
+            flags: CV2_FLAGS | MessageFlags.Ephemeral,
+        });
 
-    await sendTicketLog(guild, ticketLogEmbed({
-        action:   'Deleted',
-        ticket:   channel,
-        user:     { tag: ticket.userTag, id: ticket.userId },
-        executor: user,
-    }));
+        await sendTicketLog(guild, ticketLogEmbed({
+            action:   'Deleted',
+            ticket:   channel,
+            user:     { tag: ticket.userTag, id: ticket.userId },
+            executor: user,
+        }));
 
-    await db.deleteTicket(channel.id);
+        await db.deleteTicket(channel.id);
 
-    await new Promise(r => setTimeout(r, 5000));
-    await channel.delete('Ticket deleted by staff').catch(() => {});
+        await new Promise(r => setTimeout(r, 5000));
+        await channel.delete('Ticket deleted by staff').catch(() => {});
+    } catch (err) {
+        console.error('[Ticket] deleteTicket error:', err);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
 //  TRANSCRIPT (manual button)
 // ─────────────────────────────────────────────────────────────
 async function transcriptTicket(interaction) {
-    const { channel, user, guild } = interaction;
-    const ticket = await db.getTicket(channel.id);
+    try {
+        const { channel, user, guild } = interaction;
+        const ticket = await db.getTicket(channel.id);
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    await generateAndSendTranscript(channel, guild, user, ticket || { userTag: 'Unknown', userId: '0', createdAt: new Date() });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await generateAndSendTranscript(channel, guild, user, ticket || { userTag: 'Unknown', userId: '0', createdAt: new Date() });
 
-    await interaction.editReply({
-        components: [new ContainerBuilder().addTextDisplayComponents(
-            new TextDisplayBuilder().setContent('✅ Transcript generated and sent to the log channel.')
-        )],
-        flags: CV2_FLAGS,
-    });
+        await interaction.editReply({
+            components: [new ContainerBuilder().addTextDisplayComponents(
+                new TextDisplayBuilder().setContent('Transcript generated and sent to the log channel.')
+            )],
+            flags: CV2_FLAGS,
+        });
+    } catch (err) {
+        console.error('[Ticket] transcriptTicket error:', err);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
 //  ADD USER (shows modal)
 // ─────────────────────────────────────────────────────────────
 async function addUser(interaction) {
-    const { channel } = interaction;
-    const ticket = await db.getTicket(channel.id);
-    if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
+    try {
+        const { channel } = interaction;
+        const ticket = await db.getTicket(channel.id);
+        if (!ticket) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('Not a valid ticket channel.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
 
-    const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
-    const modal = new ModalBuilder()
-        .setCustomId('ticket_add_user_modal')
-        .setTitle('Add User to Ticket');
+        const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+        const modal = new ModalBuilder()
+            .setCustomId('ticket_add_user_modal')
+            .setTitle('Add User to Ticket');
 
-    const input = new TextInputBuilder()
-        .setCustomId('user_id_input')
-        .setLabel('User ID or Mention')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setPlaceholder('Enter user ID (e.g. 123456789012345678)');
+        const input = new TextInputBuilder()
+            .setCustomId('user_id_input')
+            .setLabel('User ID or Mention')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder('Enter user ID (e.g. 123456789012345678)');
 
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-    await interaction.showModal(modal);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        await interaction.showModal(modal);
+    } catch (err) {
+        console.error('[Ticket] addUser error:', err);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
 //  REMOVE USER (shows modal)
 // ─────────────────────────────────────────────────────────────
 async function removeUser(interaction) {
-    const { channel } = interaction;
-    const ticket = await db.getTicket(channel.id);
-    if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
+    try {
+        const { channel } = interaction;
+        const ticket = await db.getTicket(channel.id);
+        if (!ticket) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('Not a valid ticket channel.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
 
-    const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
-    const modal = new ModalBuilder()
-        .setCustomId('ticket_remove_user_modal')
-        .setTitle('Remove User from Ticket');
+        const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+        const modal = new ModalBuilder()
+            .setCustomId('ticket_remove_user_modal')
+            .setTitle('Remove User from Ticket');
 
-    const input = new TextInputBuilder()
-        .setCustomId('user_id_input')
-        .setLabel('User ID to Remove')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setPlaceholder('Enter user ID (e.g. 123456789012345678)');
+        const input = new TextInputBuilder()
+            .setCustomId('user_id_input')
+            .setLabel('User ID to Remove')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder('Enter user ID (e.g. 123456789012345678)');
 
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-    await interaction.showModal(modal);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        await interaction.showModal(modal);
+    } catch (err) {
+        console.error('[Ticket] removeUser error:', err);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
 //  Handle add/remove user modal submissions
 // ─────────────────────────────────────────────────────────────
 async function handleAddUserModal(interaction) {
-    const { channel, guild } = interaction;
-    const rawId = interaction.fields.getTextInputValue('user_id_input').replace(/[<@!>]/g, '');
-
     try {
+        const { channel, guild } = interaction;
+        const rawId = interaction.fields.getTextInputValue('user_id_input').replace(/[<@!>]/g, '');
+
         const member = await guild.members.fetch(rawId);
         await channel.permissionOverwrites.edit(member.id, {
             ViewChannel:        true,
@@ -436,49 +518,49 @@ async function handleAddUserModal(interaction) {
         });
         await interaction.reply({
             components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(`✅ Added ${member.user.tag} to the ticket.`)
+                new TextDisplayBuilder().setContent(`Added ${member.user.tag} to the ticket.`)
             )],
             flags: CV2_FLAGS | MessageFlags.Ephemeral,
         });
     } catch {
         await interaction.reply({
             components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent('❌ User not found. Make sure you entered a valid user ID.')
+                new TextDisplayBuilder().setContent('User not found. Make sure you entered a valid user ID.')
             )],
             flags: CV2_FLAGS | MessageFlags.Ephemeral,
-        });
+        }).catch(() => {});
     }
 }
 
 async function handleRemoveUserModal(interaction) {
-    const { channel } = interaction;
-    const ticket = await db.getTicket(channel.id);
-    const rawId  = interaction.fields.getTextInputValue('user_id_input').replace(/[<@!>]/g, '');
-
-    if (ticket && rawId === ticket.userId) {
-        return interaction.reply({
-            components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent('❌ You cannot remove the ticket owner.')
-            )],
-            flags: CV2_FLAGS | MessageFlags.Ephemeral,
-        });
-    }
-
     try {
+        const { channel } = interaction;
+        const ticket = await db.getTicket(channel.id);
+        const rawId  = interaction.fields.getTextInputValue('user_id_input').replace(/[<@!>]/g, '');
+
+        if (ticket && rawId === ticket.userId) {
+            return interaction.reply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('You cannot remove the ticket owner.')
+                )],
+                flags: CV2_FLAGS | MessageFlags.Ephemeral,
+            });
+        }
+
         await channel.permissionOverwrites.delete(rawId);
         await interaction.reply({
             components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent('✅ User removed from the ticket.')
+                new TextDisplayBuilder().setContent('User removed from the ticket.')
             )],
             flags: CV2_FLAGS | MessageFlags.Ephemeral,
         });
     } catch {
         await interaction.reply({
             components: [new ContainerBuilder().addTextDisplayComponents(
-                new TextDisplayBuilder().setContent('❌ Failed to remove user.')
+                new TextDisplayBuilder().setContent('Failed to remove user.')
             )],
             flags: CV2_FLAGS | MessageFlags.Ephemeral,
-        });
+        }).catch(() => {});
     }
 }
 
