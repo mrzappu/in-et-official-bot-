@@ -76,8 +76,13 @@ function getTicketButtonRow(claimed = false, closed = false) {
 async function createTicket(interaction, ticketCategory = 'General Support') {
     const { guild, user } = interaction;
 
-    // Check existing open ticket from DB
-    const existing = await db.getOpenTicketByUser(user.id);
+    let existing = null;
+    try {
+        existing = await db.getOpenTicketByUser(user.id);
+    } catch (dbErr) {
+        console.error('[Ticket] DB lookup failed:', dbErr.message);
+    }
+
     if (existing) {
         return interaction.reply({
             components: [new ContainerBuilder().addTextDisplayComponents(
@@ -89,77 +94,95 @@ async function createTicket(interaction, ticketCategory = 'General Support') {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Always use the hardcoded open category + configured roles
-    const categoryId    = '1529455858612830238';
-    const supportRoleId = config.ROLES.TICKET_SUPPORT;
-    const adminRoleId   = config.ROLES.TICKET_ADMIN;
+    try {
+        const categoryId    = '1529455858612830238';
+        const supportRoleId = config.ROLES.TICKET_SUPPORT;
+        const adminRoleId   = config.ROLES.TICKET_ADMIN;
 
-    const channelName = `📜〢${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        const category = guild.channels.cache.get(categoryId);
+        if (!category) {
+            return interaction.editReply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent('❌ Ticket category not found. Please contact an administrator.')
+                )],
+                flags: CV2_FLAGS,
+            });
+        }
 
-    const permissionOverwrites = [
-        { id: guild.id,  deny: [PermissionFlagsBits.ViewChannel] },
-        { id: user.id,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-    ];
+        const channelName = `📜〢${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 
-    if (supportRoleId && !supportRoleId.includes('_HERE')) {
-        permissionOverwrites.push({
-            id: supportRoleId,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
+        const permissionOverwrites = [
+            { id: guild.id,  deny: [PermissionFlagsBits.ViewChannel] },
+            { id: user.id,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        ];
+
+        if (supportRoleId && !supportRoleId.includes('_HERE')) {
+            permissionOverwrites.push({
+                id: supportRoleId,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
+            });
+        }
+
+        if (adminRoleId && !adminRoleId.includes('_HERE')) {
+            permissionOverwrites.push({
+                id: adminRoleId,
+                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels],
+            });
+        }
+
+        const ticketChannel = await guild.channels.create({
+            name: channelName,
+            type: ChannelType.GuildText,
+            parent: categoryId,
+            permissionOverwrites,
+            topic: `Ticket by ${user.tag} | User ID: ${user.id} | Category: ${ticketCategory}`,
         });
-    }
 
-    if (adminRoleId && !adminRoleId.includes('_HERE')) {
-        permissionOverwrites.push({
-            id: adminRoleId,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels],
+        await db.saveTicket({
+            channelId:  ticketChannel.id,
+            userId:     user.id,
+            userTag:    user.tag,
+            guildId:    guild.id,
+            claimedBy:  null,
+            closed:     false,
         });
+
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📜 Ticket — ${user.username}`))
+            .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+                `${user} opened a ticket.\n\n**Category:** ${ticketCategory}\n\nPlease describe your issue and a staff member will assist you shortly.\n\n-# Opened: <t:${Math.floor(Date.now() / 1000)}:F>`
+            ));
+
+        const buttonsRow = getTicketButtonRow(false, false);
+        container.addActionRowComponents(buttonsRow);
+
+        await ticketChannel.send({ components: [container], flags: CV2_FLAGS });
+
+        await sendTicketLog(guild, ticketLogEmbed({
+            action: 'Created',
+            ticket: ticketChannel,
+            user:   user,
+            executor: user,
+        }));
+
+        await interaction.editReply({
+            components: [new ContainerBuilder().addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`✅ Ticket created: <#${ticketChannel.id}>`)
+            )],
+            flags: CV2_FLAGS,
+        });
+    } catch (err) {
+        console.error('[Ticket] createTicket failed:', err);
+        try {
+            await interaction.editReply({
+                components: [new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(`❌ Failed to create ticket: ${err.message}`)
+                )],
+                flags: CV2_FLAGS,
+            });
+        } catch (e) { /* interaction may have expired */ }
     }
-
-    const ticketChannel = await guild.channels.create({
-        name: channelName,
-        type: ChannelType.GuildText,
-        parent: categoryId,
-        permissionOverwrites,
-        topic: `Ticket by ${user.tag} | User ID: ${user.id} | Category: ${ticketCategory}`,
-    });
-
-    // ── Save to DB (persistent) ─────────────────────────────
-    await db.saveTicket({
-        channelId:  ticketChannel.id,
-        userId:     user.id,
-        userTag:    user.tag,
-        guildId:    guild.id,
-        claimedBy:  null,
-        closed:     false,
-    });
-
-    // Post ticket panel in channel
-    const container = new ContainerBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📜 Ticket — ${user.username}`))
-        .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-            `${user} opened a ticket.\n\n**Category:** ${ticketCategory}\n\nPlease describe your issue and a staff member will assist you shortly.\n\n-# Opened: <t:${Math.floor(Date.now() / 1000)}:F>`
-        ));
-
-    const buttonsRow = getTicketButtonRow(false, false);
-    container.addActionRowComponents(buttonsRow);
-
-    await ticketChannel.send({ components: [container], flags: CV2_FLAGS });
-
-    // Log to open channel
-    await sendTicketLog(guild, ticketLogEmbed({
-        action: 'Created',
-        ticket: ticketChannel,
-        user:   user,
-        executor: user,
-    }));
-
-    await interaction.editReply({
-        components: [new ContainerBuilder().addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`✅ Ticket created: <#${ticketChannel.id}>`)
-        )],
-        flags: CV2_FLAGS,
-    });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -183,7 +206,6 @@ async function claimTicket(interaction) {
     const isClaiming = ticket.claimedBy !== user.id;
     const newClaimedBy = isClaiming ? user.id : null;
 
-    // Update DB
     await db.updateTicket(channel.id, { claimedBy: newClaimedBy });
 
     const container = new ContainerBuilder()
@@ -214,20 +236,17 @@ async function closeTicket(interaction) {
     const ticket = await db.getTicket(channel.id);
     if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
 
-    // Update DB
     await db.updateTicket(channel.id, {
         closed:   true,
         closedAt: new Date(),
         closedBy: user.id,
     });
 
-    // Move to closed category if configured
     const closedCatId = config.CATEGORIES.TICKETS_CLOSED;
     if (closedCatId && !closedCatId.includes('_HERE')) {
         await channel.setParent(closedCatId, { lockPermissions: false }).catch(() => {});
     }
 
-    // Deny send messages for ticket opener
     await channel.permissionOverwrites.edit(ticket.userId, {
         SendMessages: false,
     }).catch(() => {});
@@ -244,11 +263,9 @@ async function closeTicket(interaction) {
 
     await interaction.update({ components: [container], flags: CV2_FLAGS });
 
-    // Auto-generate transcript on close
     const freshTicket = await db.getTicket(channel.id);
     await generateAndSendTranscript(channel, guild, user, freshTicket || ticket);
 
-    // Log to close channel
     await sendTicketLog(guild, ticketLogEmbed({
         action:   'Closed',
         ticket:   channel,
@@ -265,14 +282,11 @@ async function reopenTicket(interaction) {
     const ticket = await db.getTicket(channel.id);
     if (!ticket) return interaction.reply({ content: 'Not a valid ticket channel.', flags: 64 });
 
-    // Update DB
     await db.updateTicket(channel.id, { closed: false, claimedBy: null });
 
-    // Restore to open category
     const openCatId = '1529455858612830238';
     await channel.setParent(openCatId, { lockPermissions: false }).catch(() => {});
 
-    // Re-allow ticket opener to send messages
     await channel.permissionOverwrites.edit(ticket.userId, {
         ViewChannel:        true,
         SendMessages:       true,
@@ -321,7 +335,6 @@ async function deleteTicket(interaction) {
         executor: user,
     }));
 
-    // Remove from DB
     await db.deleteTicket(channel.id);
 
     await new Promise(r => setTimeout(r, 5000));
@@ -495,9 +508,8 @@ async function generateAndSendTranscript(channel, guild, executor, ticket) {
 //  SEND TICKET LOG (routes by action)
 // ─────────────────────────────────────────────────────────────
 async function sendTicketLog(guild, embed) {
-    let chId = config.CHANNELS.TICKET_LOG;  // open / claim / unclaim
+    let chId = config.CHANNELS.TICKET_LOG;
 
-    // Route close/delete logs to dedicated close channel
     if (embed.data && embed.data.title &&
         (embed.data.title.includes('Closed') || embed.data.title.includes('Deleted'))) {
         chId = config.CHANNELS.TICKET_CLOSE_LOG || config.CHANNELS.TICKET_LOG;
